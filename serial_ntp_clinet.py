@@ -6,6 +6,12 @@ import time
 import numpy as np
 import multiprocessing
 import subprocess
+from src.utils import *
+
+#This is for sending the node's to the ground station
+state_ids = {'vio_ntp_sync_state':6}
+state_vals = {'vio_ntp_sync_state':False}  
+hyperTele = hypervisorTelemetry('10.42.0.1', 10000, state_ids, state_vals)
 
 
 def adjtSpeed(tick):
@@ -18,7 +24,7 @@ def adjtSpeed(tick):
     
 def setClock(time_sec, time_usec):
     '''A function that calls a custo C program that sets the current time'''
-    subprocess.Popen(['sudo', '/home/pi/python-serial-ntp/setclock', f'{time_sec}', f'{time_usec}'],stdout=subprocess.PIPE)
+    subprocess.Popen(['sudo', './setclock', f'{time_sec}', f'{time_usec}'],stdout=subprocess.PIPE)
 
 
 class serialNtpClient():
@@ -54,6 +60,9 @@ class serialNtpClient():
         # For identification purposes, we can record the timestamps used for running the NTP algorithm
         if self.record:
             self.dataset = []
+
+        self.last_hypervisor_state_update = time.time()
+
         
     def receivingThread(self):
         '''A thread that handles the responses from the server'''
@@ -96,6 +105,16 @@ class serialNtpClient():
                     del(self.moving_window[0])
                     #print the skew (for debugging)
                     print(skew_us/1000.0)
+
+                    #Update the hypervisor on the state of sync lock
+                    
+                    self.last_hypervisor_state_update = time.time()
+
+                    if abs(skew_us) < 2000:
+                        state_vals['vio_ntp_sync_state'] = True
+                    else:
+                        state_vals['vio_ntp_sync_state'] = False
+
                 #record the raw stamps for calibration purposes
                 if self.record:
                     self.dataset.append([self.stamp1, self.stamp2, self.stamp3, self.stamp4])
@@ -106,6 +125,11 @@ class serialNtpClient():
             payload = struct.pack('Q', time.time_ns())
             self.port.write(payload)
             time.sleep( 1.0/self.transmit_rate )
+                                
+            if time.time() - self.last_hypervisor_state_update > 3:
+                state_vals['vio_ntp_sync_state'] = False
+
+            hyperTele.update()
               
     def clientStop(self):
         self.running = False
